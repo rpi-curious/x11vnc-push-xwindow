@@ -13,8 +13,8 @@ __DESCRIPTION__='Pushes/mirrors selected XWindow to remote via SSH port forwardi
 
 
 ## Source module code within this script
-source "${__DIR__}/modules/argument-parser/argument-parser.sh"
-source "${__DIR__}/modules/trap-failure/failure.sh"
+source "${__DIR__}/shared_functions/modules/argument-parser/argument-parser.sh"
+source "${__DIR__}/shared_functions/modules/trap-failure/failure.sh"
 
 
 trap 'failure "LINENO" "BASH_LINENO" "${BASH_COMMAND}" "${?}"' ERR
