@@ -180,29 +180,50 @@ grep -q -- "${_x11vnc_listen_port}" <<<"$(netstat -plantu 2>/dev/null)" || {
 }
 
 
-ssh -R localhost:${_vnc_viewer_port}:localhost:${_x11vnc_listen_port} "${_target_host}" <<EOF
-reinitalize_xscreensaver(){
-  	echo 'Resuming: xscreensaver'
-  	DISPLAY=:0 xscreensaver -no-splash 2>&1 >/dev/null &
-  	sleep 3
-  	DISPLAY=:0 xscreensaver-command -activate
-}
-
-
-initalize_viewer(){
-    _xscreensaver_time="\$(DISPLAY=:0 xscreensaver-command -time 2>&1)"
-    [[ "\${_xscreensaver_time}" =~ 'no screensaver is running' ]] || {
-        trap 'reinitalize_xscreensaver' RETURN SIGINT SIGTERM EXIT
-        echo 'Halting: xscreensaver'
-        DISPLAY=:0 xscreensaver-command -deactivate
-        DISPLAY=:0 xscreensaver-command -exit
+initialize_connection() {
+    ssh -R localhost:${_vnc_viewer_port}:localhost:${_x11vnc_listen_port} "${_target_host}" <<EOF
+    reinitalize_xscreensaver(){
+      	echo 'Resuming: xscreensaver'
+      	DISPLAY=:0 xscreensaver -no-splash 2>&1 >/dev/null &
+      	sleep 3
+      	DISPLAY=:0 xscreensaver-command -activate
     }
 
-    printf 'Starting: \$(which ${_vnc_viewer_name}) %s\n' "${_vnc_viewer_opts[*]}"
-  	DISPLAY=:0 \$(which ${_vnc_viewer_name}) ${_vnc_viewer_opts[@]}
-  	return "${?}"
+
+    initalize_viewer(){
+        _xscreensaver_time="\$(DISPLAY=:0 xscreensaver-command -time 2>&1)"
+        [[ "\${_xscreensaver_time}" =~ 'no screensaver is running' ]] || {
+            trap 'reinitalize_xscreensaver' RETURN SIGINT SIGTERM EXIT
+            echo 'Halting: xscreensaver'
+            DISPLAY=:0 xscreensaver-command -deactivate
+            DISPLAY=:0 xscreensaver-command -exit
+        }
+
+        printf 'Starting: \$(which ${_vnc_viewer_name}) %s\n' "${_vnc_viewer_opts[*]}"
+      	DISPLAY=:0 \$(which ${_vnc_viewer_name}) ${_vnc_viewer_opts[@]}
+        return "${?}"
+    }
+
+
+    initalize_viewer
+EOF
 }
 
 
-initalize_viewer
-EOF
+initialize_connection &
+_connection_pid="$!"
+
+
+printf 'Press %s to quit...\n' "q"
+while read -n1 -r _input; do
+    case "${_input,,}" in
+        q)
+            printf 'Killing PID %i\n' "${_connection_pid}"
+            kill "${_connection_pid}"
+            sleep 2
+            printf 'Please use Ctrl^c to exit!'
+        ;;
+    esac
+
+    sleep 1
+done
