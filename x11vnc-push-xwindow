@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+
+
+## Find true directory script resides in, true name, and true path
+__SOURCE__="${BASH_SOURCE[0]}"
+while [[ -h "${__SOURCE__}" ]]; do
+    __SOURCE__="$(find "${__SOURCE__}" -type l -ls | sed -n 's@^.* -> \(.*\)@\1@p')"
+done
+__DIR__="$(cd -P "$(dirname "${__SOURCE__}")" && pwd)"
+__NAME__="${__SOURCE__##*/}"
+__AUTHOR__='S0AndS0'
+__DESCRIPTION__='Pushes/mirrors selected XWindow to remote via SSH port forwarding'
+
+
+## Source module code within this script
+source "${__DIR__}/modules/argument-parser/argument-parser.sh"
+source "${__DIR__}/modules/trap-failure/failure.sh"
+
+
+trap 'failure "LINENO" "BASH_LINENO" "${BASH_COMMAND}" "${?}"' ERR
+
+
+__license__(){
+    local _date_year="$(date +'%Y')"
+    cat <<EOF
+${__DESCRIPTION__}
+Copyright (C) ${_date_year:-2020} ${__AUTHOR__:-S0AndS0}
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+EOF
+}
+
+
+usage() {
+    local _message="${1}"
+    cat <<EOF
+${__DESCRIPTION__}
+
+
+## Augments ${__NAME__%.*} responds to
+
+
+--help | -h
+
+    Prints this message and exits
+
+
+--x11vnc-listen-port="${_x11vnc_listen_port}"
+
+    Default '5900', port that x11vnc will serve XWindow session on 'localhost' for this device.
+
+    Note, if listen port is already in use then session will be reused, otherwise a new session will be initialized.
+
+
+--vnc-viewer-port="${_vnc_viewer_port}"
+
+    Default '5900', port that remote host will connect to on their relative 'localhost' to view forwarded XWindow session.
+
+    Note, if 'xscreensaver' is detected on remote host, then it will be disabled until x11vnc session is terminated
+
+
+--vnc-viewer-name="${_vnc_viewer_name}"
+
+    Default 'vncviewer', executable name of VNC Viewer.
+
+    Note, if troubles are had when using a VNC Viewer other than 'vncviewer', please try 'vncviewer' before opening a new Issue.
+
+
+--id="${_id}"
+
+    Default 'pick', XWindow ID to forward to remote host.
+
+    Note, if set to 'none' then entire XWindow session will be forwarded.
+
+
+${_target_host:-<target-host>}
+
+    Required, remote SSH host that XWindow session will be forwarded to.
+
+
+## Example
+
+
+${__NAME__} raspberrypi
+EOF
+
+    [[ "${#_message}" -gt '0' ]] && {
+        printf >&2 '\n## Error: %s\n' "${_message}"
+    }
+}
+
+
+## Defaults
+_target_host=''
+_x11vnc_listen_port='5900'
+_vnc_viewer_port='5900'
+_id='pick'
+_vnc_viewer_name='vncviewer'
+
+
+## Save passed arguments and acceptable arguments to Bash arrays
+_passed_args=("${@:?No arguments provided}")
+_acceptable_args=(
+    '--help|-h:bool'
+    '--x11vnc-listen-port:alpha_numeric'
+    '--vnc-viewer-port:alpha_numeric'
+    '--id:alpha_numeric'
+    '--target-host:path-nil'
+)
+
+
+## Pass arrays by reference/name to the `argument_parser` function
+argument_parser '_passed_args' '_acceptable_args'
+_exit_status="$?"
+
+
+## Print documentation for the script and exit, or allow further execution
+((_help)) || ((_exit_status)) && {
+    usage
+    exit "${_exit_status:-0}"
+}
+
+(("${#_target_host}")) || {
+    usage 'Missing target host parameter'
+    exit 1
+}
+
+
+## Note, '-shared' with '-forever' and '-threads' or '-once' may be wanted
+##  in addition to the following options
+_x11vnc_server_opts=(
+    '-quiet'
+    '-noshared'
+    '-viewonly'
+    '-noremote'
+    '-nobell'
+    '-nosel'
+    '-noprimary'
+    '-nosetprimary'
+    '-noclipboard'
+    '-nosetclipboard'
+    # '-disablefiletransfer'
+    '-cursor' 'most'
+    '-noipv6'
+    '-allow' '127.0.0.1'
+    '-autoport' "${_x11vnc_listen_port}"
+    '-listen' '127.0.0.1'
+    '-nopw'
+    '-nossl'
+    '-bg'
+)
+
+[[ "${_id}" =~ 'none' ]] || {
+  _x11vnc_server_opts+=(
+    '-id' "${_id}"
+  )
+}
+
+
+_vnc_viewer_opts=(
+    '-viewonly'
+    '-fullscreen'
+    "localhost::${_vnc_viewer_port}"
+)
+
+
+grep -q -- "${_x11vnc_listen_port}" <<<"$(netstat -plantu 2>/dev/null)" || {
+    printf '# Running: x11vnc %s\n' "${_x11vnc_server_opts[*]}"
+    x11vnc ${_x11vnc_server_opts[@]}
+}
+
+
+ssh -R localhost:${_vnc_viewer_port}:localhost:${_x11vnc_listen_port} "${_target_host}" <<EOF
+reinitalize_xscreensaver(){
+  	echo 'Resuming: xscreensaver'
+  	DISPLAY=:0 xscreensaver -no-splash 2>&1 >/dev/null &
+  	sleep 3
+  	DISPLAY=:0 xscreensaver-command -activate
+}
+
+
+initalize_viewer(){
+    _xscreensaver_time="\$(DISPLAY=:0 xscreensaver-command -time 2>&1)"
+    [[ "\${_xscreensaver_time}" =~ 'no screensaver is running' ]] || {
+        trap 'reinitalize_xscreensaver' RETURN SIGINT SIGTERM EXIT
+        echo 'Halting: xscreensaver'
+        DISPLAY=:0 xscreensaver-command -deactivate
+        DISPLAY=:0 xscreensaver-command -exit
+    }
+
+    printf 'Starting: \$(which ${_vnc_viewer_name}) %s\n' "${_vnc_viewer_opts[*]}"
+  	DISPLAY=:0 \$(which ${_vnc_viewer_name}) ${_vnc_viewer_opts[@]}
+  	return "${?}"
+}
+
+
+initalize_viewer
+EOF
